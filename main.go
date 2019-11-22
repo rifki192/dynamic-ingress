@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	// "strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -18,7 +17,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
-	// "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
 
 	// for auth with gcp
