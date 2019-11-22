@@ -11,13 +11,13 @@ import (
 
 	core "k8s.io/api/core/v1"
 	extensions "k8s.io/api/extensions/v1beta1"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/informers"
 
 	// for auth with gcp
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
@@ -139,17 +139,16 @@ func run(c *cli.Context) error {
 		},
 	)
 
-
 	//Watch Namespace Events
 	factory := informers.NewSharedInformerFactory(client, 0)
-    informer := factory.Core().V1().Namespaces().Informer()
-    informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-        AddFunc: func(obj interface{}) {
+	informer := factory.Core().V1().Namespaces().Informer()
+	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
 			nms := obj.(*core.Namespace)
 			log.Info("Namespace added: ", nms.Name)
 			lb := nms.Labels
 			if _, found := lb["dynamic-ingress/auto"]; found {
-					syncIngressSvc(client)
+				syncIngressSvc(client)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -175,10 +174,10 @@ func run(c *cli.Context) error {
 
 	stopSvc := make(chan struct{})
 	stopNms := make(chan struct{})
-    go informer.Run(stopNms)
-    if !cache.WaitForCacheSync(stopNms, informer.HasSynced) {
-        log.Error("Timed out waiting for caches to sync")
-    }
+	go informer.Run(stopNms)
+	if !cache.WaitForCacheSync(stopNms, informer.HasSynced) {
+		log.Error("Timed out waiting for caches to sync")
+	}
 	go controllerSvc.Run(stopSvc)
 	for {
 		time.Sleep(time.Second)
@@ -216,7 +215,7 @@ func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error
 	// tmp get namespaces labels
 	enabledNamespaces := getNamespaceWithLabels(clientset)
 
-	log.Info("enabled NS: ", enabledNamespaces)
+	log.Info("Enabled Namespaces: ", enabledNamespaces)
 
 	// get services from all namespaces
 	svc, err := clientset.CoreV1().Services("").List(metav1.ListOptions{})
@@ -242,10 +241,10 @@ func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error
 			add := false
 			val, inFound := lb["dynamic-ingress/auto"]
 			val2, inFound2 := findN(enabledNamespaces, namespace)
-			if (inFound2 && val2 == "enabled") {
+			if inFound2 && val2 == "enabled" {
 				if inFound && val == "disabled" {
 					add = false
-				}else{
+				} else {
 					add = true
 				}
 			}
@@ -330,12 +329,11 @@ func cleanupIngress(clientset *kubernetes.Clientset, existIngress []extensions.I
 	_ = len(existIngress)
 	for _, val := range existIngress {
 		if found := findI(svcIngress, val.Name, val.Namespace); !found {
-			log.Info("unusedIngress: ", unusedIngress)
 			unusedIngress = append(unusedIngress, val)
 		}
 	}
 
-	_ = len (unusedIngress)
+	_ = len(unusedIngress)
 	for _, val := range unusedIngress {
 		log.Info("This unused ingress %s on namespace %s will be deleted", val.Name, val.Namespace)
 		err := clientset.ExtensionsV1beta1().Ingresses(val.Namespace).Delete(val.Name, &metav1.DeleteOptions{})
