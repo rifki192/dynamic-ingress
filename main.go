@@ -27,6 +27,7 @@ var (
 	domainSuffix string
 	kubeconfig   string
 	ingressName  = "dynamic-services-ingress"
+	cacheNamespaces []core.Namespace
 )
 
 type listBackends struct {
@@ -99,7 +100,7 @@ func run(c *cli.Context) error {
 	log.Info("Initialized ingress synced with services: ", existIngress)
 
 	// Watch Services Event
-	// TODO: Manipulate Map for each Events and update it accordingly instead of reSync every Event occur
+	// TODO: Manipulate Map for each Events and update it accordingly instead of reSync every Event occured
 	watchlistSvc := cache.NewListWatchFromClient(client.CoreV1().RESTClient(), "services", "",
 		fields.Everything())
 	_, controllerSvc := cache.NewInformer(
@@ -110,18 +111,15 @@ func run(c *cli.Context) error {
 			AddFunc: func(obj interface{}) {
 				svc := obj.(*core.Service)
 				log.Info("Service added: ", svc.Name, " on namespace: ", svc.Namespace)
-				lb := svc.Labels
-				if val, found := lb["dynamic-ingress/auto"]; found {
-					if val == "enabled" {
-						syncIngressSvc(client)
-					}
+				log.Info(isEligibleForSync(svc))
+				if isEligibleForSync(svc) {
+					syncIngressSvc(client)
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				svc := obj.(*core.Service)
 				log.Info("Service deleted: ", svc.Name, " on namespace: ", svc.Namespace)
-				lb := svc.Labels
-				if _, found := lb["dynamic-ingress/auto"]; found {
+				if isEligibleForSync(svc) {
 					syncIngressSvc(client)
 				}
 			},
@@ -129,10 +127,15 @@ func run(c *cli.Context) error {
 				oldSvc := oldObj.(*core.Service)
 				newSvc := newObj.(*core.Service)
 				log.Info("Service changed: ", newSvc.Name, " on namespace: ", newSvc.Namespace)
-				if _, found := oldSvc.Labels["dynamic-ingress/auto"]; found {
-					syncIngressSvc(client)
+				forceSync :=  false
+				if isEligibleForSync(oldSvc) {
+					forceSync = true
 				}
-				if _, found := newSvc.Labels["dynamic-ingress/auto"]; found {
+				if isEligibleForSync(newSvc) {
+					forceSync = true
+				}
+
+				if forceSync {
 					syncIngressSvc(client)
 				}
 			},
@@ -146,16 +149,14 @@ func run(c *cli.Context) error {
 		AddFunc: func(obj interface{}) {
 			nms := obj.(*core.Namespace)
 			log.Info("Namespace added: ", nms.Name)
-			lb := nms.Labels
-			if _, found := lb["dynamic-ingress/auto"]; found {
+			if isEligibleForSync(nms) {
 				syncIngressSvc(client)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			nms := obj.(*core.Namespace)
 			log.Info("Namespace deleted: ", nms.Name)
-			lb := nms.Labels
-			if _, found := lb["dynamic-ingress/auto"]; found {
+			if isEligibleForSync(nms) {
 				syncIngressSvc(client)
 			}
 		},
@@ -163,10 +164,15 @@ func run(c *cli.Context) error {
 			oldNms := oldObj.(*core.Namespace)
 			newNms := newObj.(*core.Namespace)
 			log.Info("Namespace changed: ", newNms.Name)
-			if _, found := oldNms.Labels["dynamic-ingress/auto"]; found {
-				syncIngressSvc(client)
+			forceSync :=  false
+			if isEligibleForSync(oldNms) {
+				forceSync = true
 			}
-			if _, found := newNms.Labels["dynamic-ingress/auto"]; found {
+			if isEligibleForSync(newNms) {
+				forceSync = true
+			}
+
+			if forceSync {
 				syncIngressSvc(client)
 			}
 		},
@@ -186,12 +192,11 @@ func run(c *cli.Context) error {
 	return nil
 }
 
-func getNamespaceWithLabels(clientset *kubernetes.Clientset) []core.Namespace {
+func cacheNamespaceWithLabels(clientset *kubernetes.Clientset) {
 	var res []core.Namespace
 	namespaces, err := clientset.CoreV1().Namespaces().List(metav1.ListOptions{})
 	if err != nil {
 		log.Error(err.Error())
-		return nil
 	}
 
 	_ = len(namespaces.Items)
@@ -204,7 +209,8 @@ func getNamespaceWithLabels(clientset *kubernetes.Clientset) []core.Namespace {
 		}
 	}
 
-	return res
+	//Update cache var with new values
+	cacheNamespaces = res
 }
 
 func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error) {
@@ -212,10 +218,10 @@ func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error
 	var listIngress map[string]listBackends
 	listIngress = make(map[string]listBackends)
 
-	// tmp get namespaces labels
-	enabledNamespaces := getNamespaceWithLabels(clientset)
+	// cache get namespaces labels
+	cacheNamespaceWithLabels(clientset)
 
-	log.Info("Enabled Namespaces: ", enabledNamespaces)
+	log.Info("Enabled Namespaces: ", cacheNamespaces)
 
 	// get services from all namespaces
 	svc, err := clientset.CoreV1().Services("").List(metav1.ListOptions{})
@@ -240,7 +246,7 @@ func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error
 		if found := findB(listIngress[namespace].Backend, svcName); !found {
 			add := false
 			val, inFound := lb["dynamic-ingress/auto"]
-			val2, inFound2 := findN(enabledNamespaces, namespace)
+			val2, inFound2 := findN(cacheNamespaces, namespace)
 			if inFound2 && val2 == "enabled" {
 				if inFound && val == "disabled" {
 					add = false
@@ -251,8 +257,6 @@ func getSvcIngress(clientset *kubernetes.Clientset) ([]extensions.Ingress, error
 			if inFound && val == "enabled" {
 				add = true
 			}
-
-			log.Info("svc: ", svcName, val)
 
 			if add {
 				newSvc := extensions.IngressBackend{
