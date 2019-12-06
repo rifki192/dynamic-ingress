@@ -65,11 +65,9 @@ func isEligibleForSync(obj interface{}) bool {
 		lb := svc.Labels
 		log.Info("Check if Service ",svc.Name,", event is elligible for update")
 
-		val, found := lb["dynamic-ingress/auto"]
+		_, found := lb["dynamic-ingress/auto"]
 		_, found2 := findN(cacheNamespaces, svc.Namespace)
-		if found2 {
-			return true
-		}else if (found && val == "enabled"){
+		if found || found2 {
 			return true
 		}
 	default:
